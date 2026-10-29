@@ -1,0 +1,1217 @@
+[leptotrack (1).py](https://github.com/user-attachments/files/34139243/leptotrack.1.py)
+import sys
+import sqlite3
+from datetime import datetime
+from pathlib import Path
+
+from PyQt6.QtWidgets import (
+    QApplication, QMainWindow, QWidget, QLabel, QPushButton,
+    QVBoxLayout, QHBoxLayout, QGridLayout, QTableWidget, QTableWidgetItem,
+    QLineEdit, QComboBox, QFrame, QHeaderView, QProgressBar,
+    QDialog, QFormLayout, QDialogButtonBox, QMessageBox,
+    QAbstractItemView, QStackedWidget
+)
+from PyQt6.QtCore import Qt, QRectF
+from PyQt6.QtGui import QPainter, QPen, QColor
+
+DB_PATH = Path(__file__).resolve().parent / "leptotrack.db"
+
+DARK_QSS = """
+QMainWindow, QWidget {
+    background-color: #10151D;
+    color: #E6EDF5;
+    font-family: "Segoe UI", Arial, sans-serif;
+    font-size: 10pt;
+}
+
+QLabel {
+    background: transparent;
+    color: #E6EDF5;
+}
+
+QFrame#statCard,
+QFrame#panel {
+    background-color: #19222E;
+    border: 1px solid #2C394A;
+    border-radius: 12px;
+}
+
+QLabel#mainTitle {
+    color: #5EEAD4;
+    font-size: 20pt;
+    font-weight: 700;
+}
+
+QLabel#badge {
+    background-color: #163A3A;
+    color: #7CE8D5;
+    border: 1px solid #28615D;
+    border-radius: 12px;
+    padding: 8px 12px;
+    font-size: 8pt;
+    font-weight: 700;
+}
+
+QLabel#statTitle {
+    color: #9BAABD;
+    font-size: 9pt;
+    font-weight: 600;
+}
+
+QLabel#statValue {
+    color: #F3F7FC;
+    font-size: 20pt;
+    font-weight: 700;
+}
+
+QLabel#sectionTitle {
+    color: #F3F7FC;
+    font-size: 13pt;
+    font-weight: 700;
+}
+
+QFrame#statCard {
+    padding: 12px;
+}
+
+QFrame#panel {
+    padding: 12px;
+}
+
+QLineEdit,
+QComboBox {
+    background-color: #101720;
+    color: #F3F7FC;
+    border: 1px solid #3A4A5F;
+    border-radius: 7px;
+    padding: 9px;
+}
+
+QLineEdit:focus,
+QComboBox:focus {
+    border: 1px solid #5EEAD4;
+}
+
+QComboBox::drop-down {
+    border: none;
+}
+
+QComboBox QAbstractItemView {
+    background-color: #19222E;
+    color: #E6EDF5;
+    selection-background-color: #0F766E;
+    border: 1px solid #2C394A;
+}
+
+QPushButton {
+    background-color: #263445;
+    color: #E6EDF5;
+    border: 1px solid #3A4A5F;
+    border-radius: 7px;
+    padding: 10px 14px;
+    font-weight: 600;
+}
+
+QPushButton:hover {
+    background-color: #314359;
+}
+
+QPushButton:pressed {
+    background-color: #1D2938;
+}
+
+QPushButton#primaryButton {
+    background-color: #0F766E;
+    color: #FFFFFF;
+    border: none;
+    padding: 12px 16px;
+}
+
+QPushButton#primaryButton:hover {
+    background-color: #0D9488;
+}
+
+QPushButton[role="delete"] {
+    background-color: #48282F;
+    border-color: #70404A;
+}
+
+QPushButton[role="delete"]:hover {
+    background-color: #5D323B;
+}
+
+QPushButton[role="refresh"] {
+    background-color: #203B43;
+    border-color: #315761;
+}
+
+QPushButton[role="refresh"]:hover {
+    background-color: #2C525C;
+}
+
+QProgressBar {
+    background-color: #2B3746;
+    border: none;
+    border-radius: 4px;
+    min-height: 8px;
+    max-height: 8px;
+}
+
+QProgressBar::chunk {
+    background-color: #2DD4BF;
+    border-radius: 4px;
+}
+
+QTableWidget {
+    background-color: #19222E;
+    alternate-background-color: #161E29;
+    gridline-color: #2C394A;
+    border: 1px solid #2C394A;
+    border-radius: 8px;
+    color: #E6EDF5;
+}
+
+QTableWidget::item {
+    padding: 6px;
+}
+
+QTableWidget::item:selected {
+    background-color: #0F766E;
+    color: #FFFFFF;
+}
+
+QHeaderView::section {
+    background-color: #1E2A38;
+    color: #9BAABD;
+    padding: 10px;
+    border: none;
+    border-bottom: 1px solid #2C394A;
+    font-weight: 700;
+}
+
+QScrollBar:vertical {
+    background-color: #141C27;
+    width: 10px;
+    margin: 0;
+}
+
+QScrollBar::handle:vertical {
+    background-color: #3A4A5F;
+    border-radius: 4px;
+    min-height: 25px;
+}
+
+QScrollBar::add-line:vertical,
+QScrollBar::sub-line:vertical {
+    height: 0;
+}
+
+QDialog,
+QMessageBox {
+    background-color: #19222E;
+}
+
+QMessageBox QLabel {
+    color: #E6EDF5;
+}
+"""
+
+def init_db():
+    conn = sqlite3.connect(str(DB_PATH))
+
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS facilities (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            location TEXT NOT NULL,
+            contact TEXT NOT NULL,
+            patients INTEGER NOT NULL DEFAULT 0,
+            total_beds INTEGER NOT NULL DEFAULT 0,
+            icu_beds INTEGER NOT NULL DEFAULT 0,
+            general_beds INTEGER NOT NULL DEFAULT 0,
+            last_updated TEXT NOT NULL
+        )
+    """)
+
+    conn.commit()
+    conn.close()
+
+def load_facilities():
+    conn = sqlite3.connect(str(DB_PATH))
+    conn.row_factory = sqlite3.Row
+
+    rows = conn.execute(
+        "SELECT * FROM facilities ORDER BY id DESC"
+    ).fetchall()
+
+    conn.close()
+
+    return [dict(row) for row in rows]
+
+def save_facility(data, record_id=None):
+    conn = sqlite3.connect(str(DB_PATH))
+    now = datetime.now().strftime("%Y-%m-%d %H:%M")
+
+    if record_id is not None:
+        conn.execute("""
+            UPDATE facilities
+            SET name = ?,
+                location = ?,
+                contact = ?,
+                patients = ?,
+                total_beds = ?,
+                icu_beds = ?,
+                general_beds = ?,
+                last_updated = ?
+            WHERE id = ?
+        """, (
+            data["name"],
+            data["location"],
+            data["contact"],
+            data["patients"],
+            data["total_beds"],
+            data["icu_beds"],
+            data["general_beds"],
+            now,
+            record_id,
+        ))
+    else:
+        conn.execute("""
+            INSERT INTO facilities (
+                name,
+                location,
+                contact,
+                patients,
+                total_beds,
+                icu_beds,
+                general_beds,
+                last_updated
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            data["name"],
+            data["location"],
+            data["contact"],
+            data["patients"],
+            data["total_beds"],
+            data["icu_beds"],
+            data["general_beds"],
+            now,
+        ))
+
+    conn.commit()
+    conn.close()
+
+def delete_facility(record_id):
+    conn = sqlite3.connect(str(DB_PATH))
+
+    conn.execute(
+        "DELETE FROM facilities WHERE id = ?",
+        (record_id,),
+    )
+
+    conn.commit()
+    conn.close()
+
+class StatCard(QFrame):
+    def __init__(self, title):
+        super().__init__()
+
+        self.setObjectName("statCard")
+
+        layout = QVBoxLayout(self)
+
+        title_label = QLabel(title)
+        title_label.setObjectName("statTitle")
+        layout.addWidget(title_label)
+
+        self.value = QLabel("—")
+        self.value.setObjectName("statValue")
+        layout.addWidget(self.value)
+
+class CapacityDonut(QWidget):
+    def __init__(self):
+        super().__init__()
+
+        self.setMinimumSize(210, 210)
+
+        self.available = 0
+        self.total = 0
+        self.occupied = 0
+
+    def set_data(self, available, total, occupied):
+        self.available = available
+        self.total = total
+        self.occupied = occupied
+        self.update()
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+
+        side = min(self.width(), self.height()) - 28
+
+        rect = QRectF(
+            (self.width() - side) / 2,
+            (self.height() - side) / 2,
+            side,
+            side,
+        )
+
+        background_pen = QPen(QColor("#2B3746"), 18)
+        painter.setPen(background_pen)
+        painter.drawArc(rect, 0, 360 * 16)
+
+        if self.total > 0:
+            percentage = self.available / self.total
+            span = int(percentage * 360 * 16)
+
+            availability_pen = QPen(QColor("#2DD4BF"), 18)
+            painter.setPen(availability_pen)
+            painter.drawArc(rect, 90 * 16, -span)
+
+        painter.setPen(QColor("#F3F7FC"))
+
+        if self.total > 0:
+            text = f"{self.available} / {self.total}\nAvailable Beds"
+        else:
+            text = "— / —\nAvailable Beds"
+
+        painter.drawText(
+            self.rect(),
+            Qt.AlignmentFlag.AlignCenter,
+            text,
+        )
+
+class CapacityBar(QFrame):
+    def __init__(self, title):
+        super().__init__()
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 5, 0, 5)
+
+        self.title_label = QLabel(title)
+        self.count_label = QLabel("— / —")
+
+        heading = QHBoxLayout()
+        heading.addWidget(self.title_label)
+        heading.addStretch()
+        heading.addWidget(self.count_label)
+        layout.addLayout(heading)
+
+        self.bar = QProgressBar()
+        self.bar.setRange(0, 100)
+        self.bar.setValue(0)
+        self.bar.setTextVisible(False)
+        layout.addWidget(self.bar)
+
+        self.status_label = QLabel("Availability not entered")
+        self.status_label.setStyleSheet(
+            "color:#8191A5;font-size:9pt;"
+        )
+        layout.addWidget(self.status_label)
+
+    def set_data(self, available, total):
+        self.count_label.setText(f"{available} / {total}")
+
+        if total <= 0:
+            self.bar.setValue(0)
+            self.status_label.setText("Availability not entered")
+            self.status_label.setStyleSheet(
+                "color:#8191A5;font-size:9pt;"
+            )
+            return
+
+        percentage = int((available / total) * 100)
+        self.bar.setValue(percentage)
+
+        if percentage < 25:
+            self.status_label.setText(
+                f"Critical — {percentage}% available"
+            )
+            self.status_label.setStyleSheet(
+                "color:#FCA5A5;font-size:9pt;font-weight:600;"
+            )
+        elif percentage < 60:
+            self.status_label.setText(
+                f"Moderate — {percentage}% available"
+            )
+            self.status_label.setStyleSheet(
+                "color:#FCD34D;font-size:9pt;font-weight:600;"
+            )
+        else:
+            self.status_label.setText(
+                f"Stable — {percentage}% available"
+            )
+            self.status_label.setStyleSheet(
+                "color:#2DD4BF;font-size:9pt;font-weight:600;"
+            )
+
+class FacilityDialog(QDialog):
+    def __init__(self, parent=None, record=None):
+        super().__init__(parent)
+
+        self.setWindowTitle(
+            "Add Facility" if record is None else "Edit Facility"
+        )
+        self.setMinimumWidth(400)
+
+        layout = QFormLayout(self)
+
+        self.name_input = QLineEdit()
+
+        self.location_input = QComboBox()
+        self.location_input.setEditable(True)
+        self.location_input.addItems([
+            "Metro Manila",
+            "Quezon City",
+            "Pasig City",
+            "Makati",
+            "Manila",
+            "Other Locations",
+        ])
+
+        self.contact_input = QLineEdit()
+
+        self.patients_input = QLineEdit()
+        self.patients_input.setPlaceholderText("0")
+
+        self.total_beds_input = QLineEdit()
+        self.total_beds_input.setPlaceholderText("0")
+
+        self.general_beds_input = QLineEdit()
+        self.general_beds_input.setPlaceholderText("0")
+
+        self.icu_beds_input = QLineEdit()
+        self.icu_beds_input.setPlaceholderText("0")
+
+        layout.addRow("Facility Name:", self.name_input)
+        layout.addRow("Location:", self.location_input)
+        layout.addRow("Contact Number:", self.contact_input)
+        layout.addRow("Reported Patients:", self.patients_input)
+        layout.addRow("Total Beds:", self.total_beds_input)
+        layout.addRow("General Beds:", self.general_beds_input)
+        layout.addRow("ICU Beds:", self.icu_beds_input)
+
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Save
+            | QDialogButtonBox.StandardButton.Cancel
+        )
+
+        save_button = buttons.button(
+            QDialogButtonBox.StandardButton.Save
+        )
+        save_button.setObjectName("primaryButton")
+
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+
+        layout.addRow(buttons)
+
+        if record is not None:
+            self.name_input.setText(record.get("name", ""))
+
+            location = record.get("location", "")
+            location_index = self.location_input.findText(location)
+
+            if location_index >= 0:
+                self.location_input.setCurrentIndex(location_index)
+            else:
+                self.location_input.setEditText(location)
+
+            self.contact_input.setText(record.get("contact", ""))
+            self.patients_input.setText(str(record.get("patients", 0)))
+            self.total_beds_input.setText(str(record.get("total_beds", 0)))
+            self.general_beds_input.setText(
+                str(record.get("general_beds", 0))
+            )
+            self.icu_beds_input.setText(
+                str(record.get("icu_beds", 0))
+            )
+
+    def get_data(self):
+        def to_int(value):
+            try:
+                return int(value.strip()) if value.strip() else 0
+            except ValueError:
+                return 0
+
+        return {
+            "name": self.name_input.text().strip(),
+            "location": self.location_input.currentText().strip(),
+            "contact": self.contact_input.text().strip(),
+            "patients": to_int(self.patients_input.text()),
+            "total_beds": to_int(self.total_beds_input.text()),
+            "general_beds": to_int(self.general_beds_input.text()),
+            "icu_beds": to_int(self.icu_beds_input.text()),
+        }
+
+class LeptoTrack(QMainWindow):
+    def __init__(self):
+        super().__init__()
+
+        self.setWindowTitle(
+            "LeptoTrack | Healthcare Monitoring System"
+        )
+        self.resize(1350, 900)
+
+        self.all_records = []
+        self.hospital_name = ""
+
+        self.stack = QStackedWidget()
+        self.setCentralWidget(self.stack)
+
+        welcome_page = QWidget()
+        welcome_layout = QVBoxLayout(welcome_page)
+        welcome_layout.setContentsMargins(32, 32, 32, 32)
+        welcome_layout.addStretch()
+
+        welcome_card = QFrame()
+        welcome_card.setObjectName("panel")
+        welcome_card.setMaximumWidth(620)
+
+        welcome_card_layout = QVBoxLayout(welcome_card)
+        welcome_card_layout.setSpacing(14)
+
+        welcome_title = QLabel("Welcome to LeptoTrack")
+        welcome_title.setObjectName("mainTitle")
+        welcome_card_layout.addWidget(welcome_title)
+
+        welcome_subtitle = QLabel(
+            "Enter your hospital name to begin capacity monitoring."
+        )
+        welcome_subtitle.setStyleSheet(
+            "color:#9BAABD;font-size:10pt;"
+        )
+        welcome_subtitle.setWordWrap(True)
+        welcome_card_layout.addWidget(welcome_subtitle)
+
+        self.hospital_input = QLineEdit()
+        self.hospital_input.setPlaceholderText(
+            "Enter hospital name..."
+        )
+        self.hospital_input.returnPressed.connect(
+            self.enter_dashboard
+        )
+        welcome_card_layout.addWidget(self.hospital_input)
+
+        self.enter_button = QPushButton(
+            "Continue to Dashboard"
+        )
+        self.enter_button.setObjectName("primaryButton")
+        self.enter_button.clicked.connect(
+            self.enter_dashboard
+        )
+        welcome_card_layout.addWidget(self.enter_button)
+
+        self.welcome_error = QLabel("")
+        self.welcome_error.setStyleSheet(
+            "color:#FCA5A5;font-size:9pt;"
+        )
+        welcome_card_layout.addWidget(self.welcome_error)
+
+        welcome_layout.addWidget(
+            welcome_card,
+            alignment=Qt.AlignmentFlag.AlignCenter,
+        )
+        welcome_layout.addStretch()
+
+        self.stack.addWidget(welcome_page)
+
+        dashboard_page = QWidget()
+        self.stack.addWidget(dashboard_page)
+        self.stack.setCurrentWidget(welcome_page)
+
+        main = QVBoxLayout(dashboard_page)
+        main.setSpacing(12)
+        main.setContentsMargins(16, 16, 16, 16)
+
+        header = QHBoxLayout()
+        branding = QVBoxLayout()
+
+        self.title_label = QLabel("LeptoTrack")
+        self.title_label.setObjectName("mainTitle")
+        branding.addWidget(self.title_label)
+
+        subtitle = QLabel(
+            "Leptospirosis Patient Volume and Healthcare Facility "
+            "Capacity Monitoring System"
+        )
+        subtitle.setStyleSheet(
+            "color:#9BAABD;font-size:9pt;"
+        )
+        branding.addWidget(subtitle)
+
+        header.addLayout(branding)
+        header.addStretch()
+
+        badge = QLabel("FACILITY CAPACITY MONITORING")
+        badge.setObjectName("badge")
+        header.addWidget(badge)
+
+        main.addLayout(header)
+
+        stats = QGridLayout()
+        stats.setSpacing(10)
+
+        self.patient_card = StatCard("Reported Patients")
+        self.total_card = StatCard("Total Beds")
+        self.available_card = StatCard("Available Beds")
+        self.icu_card = StatCard("Available ICU Beds")
+
+        cards = [
+            self.patient_card,
+            self.total_card,
+            self.available_card,
+            self.icu_card,
+        ]
+
+        for column, card in enumerate(cards):
+            stats.addWidget(card, 0, column)
+
+        main.addLayout(stats)
+
+        visual_row = QHBoxLayout()
+
+        donut_frame = QFrame()
+        donut_frame.setObjectName("panel")
+
+        donut_layout = QVBoxLayout(donut_frame)
+
+        donut_title = QLabel("Overall Bed Availability")
+        donut_title.setObjectName("sectionTitle")
+        donut_title.setStyleSheet("font-size:11pt;")
+        donut_layout.addWidget(donut_title)
+
+        self.donut = CapacityDonut()
+        donut_layout.addWidget(
+            self.donut,
+            alignment=Qt.AlignmentFlag.AlignCenter,
+        )
+
+        self.occupied_label = QLabel("Occupied beds: —")
+        self.occupied_label.setAlignment(
+            Qt.AlignmentFlag.AlignCenter
+        )
+        self.occupied_label.setStyleSheet(
+            "color:#9BAABD;font-size:9pt;"
+        )
+        donut_layout.addWidget(self.occupied_label)
+
+        visual_row.addWidget(donut_frame, 1)
+
+        icu_donut_frame = QFrame()
+        icu_donut_frame.setObjectName("panel")
+
+        icu_donut_layout = QVBoxLayout(icu_donut_frame)
+
+        icu_donut_title = QLabel("ICU Bed Availability")
+        icu_donut_title.setObjectName("sectionTitle")
+        icu_donut_title.setStyleSheet("font-size:11pt;")
+        icu_donut_layout.addWidget(icu_donut_title)
+
+        self.icu_donut = CapacityDonut()
+        icu_donut_layout.addWidget(
+            self.icu_donut,
+            alignment=Qt.AlignmentFlag.AlignCenter,
+        )
+
+        self.icu_occupied_label = QLabel(
+            "Occupied ICU beds: —"
+        )
+        self.icu_occupied_label.setAlignment(
+            Qt.AlignmentFlag.AlignCenter
+        )
+        self.icu_occupied_label.setStyleSheet(
+            "color:#9BAABD;font-size:9pt;"
+        )
+        icu_donut_layout.addWidget(
+            self.icu_occupied_label
+        )
+
+        visual_row.addWidget(icu_donut_frame, 1)
+
+        bars_frame = QFrame()
+        bars_frame.setObjectName("panel")
+
+        bars_layout = QVBoxLayout(bars_frame)
+
+        bars_title = QLabel("Capacity by Bed Type")
+        bars_title.setObjectName("sectionTitle")
+        bars_title.setStyleSheet("font-size:11pt;")
+        bars_layout.addWidget(bars_title)
+
+        self.general_bar = CapacityBar("General Beds")
+        self.icu_bar = CapacityBar("ICU Beds")
+
+        bars_layout.addWidget(self.general_bar)
+        bars_layout.addWidget(self.icu_bar)
+
+        self.warning_label = QLabel(
+            "Capacity status will appear when data is available."
+        )
+        self.warning_label.setWordWrap(True)
+        self.warning_label.setStyleSheet(
+            "color:#8191A5;font-size:9pt;padding:6px;"
+        )
+        bars_layout.addWidget(self.warning_label)
+        bars_layout.addStretch()
+
+        visual_row.addWidget(bars_frame, 2)
+        main.addLayout(visual_row)
+
+        section = QLabel("Hospital Record")
+        section.setObjectName("sectionTitle")
+        main.addWidget(section)
+
+        toolbar = QHBoxLayout()
+
+        self.search_input = QLineEdit()
+        self.search_input.setPlaceholderText(
+            "Search hospital name or location..."
+        )
+        self.search_input.textChanged.connect(
+            self.apply_filters
+        )
+
+        self.location_filter = QComboBox()
+        self.location_filter.addItems([
+            "All Locations",
+            "Metro Manila",
+            "Quezon City",
+            "Pasig City",
+            "Makati",
+            "Manila",
+            "Other Locations",
+        ])
+        self.location_filter.currentIndexChanged.connect(
+            self.apply_filters
+        )
+
+        toolbar.addWidget(self.search_input, 3)
+        toolbar.addWidget(self.location_filter, 1)
+
+        main.addLayout(toolbar)
+
+        buttons = QHBoxLayout()
+
+        self.edit_button = QPushButton("Edit Record")
+        self.edit_button.setProperty("role", "edit")
+        self.edit_button.clicked.connect(
+            self.edit_facility
+        )
+        buttons.addWidget(self.edit_button)
+
+        self.delete_button = QPushButton("Delete Record")
+        self.delete_button.setProperty("role", "delete")
+        self.delete_button.clicked.connect(
+            self.delete_facility
+        )
+        buttons.addWidget(self.delete_button)
+
+        self.refresh_button = QPushButton("Refresh")
+        self.refresh_button.setProperty("role", "refresh")
+        self.refresh_button.clicked.connect(
+            self.refresh
+        )
+        buttons.addWidget(self.refresh_button)
+
+        buttons.addStretch()
+        main.addLayout(buttons)
+
+        self.table = QTableWidget(0, 8)
+        self.table.setHorizontalHeaderLabels([
+            "Hospital ID",
+            "Hospital Name",
+            "Location",
+            "Contact Number",
+            "Patients",
+            "Total Beds",
+            "Bed Availability",
+            "Last Updated",
+        ])
+
+        self.table.horizontalHeader().setSectionResizeMode(
+            QHeaderView.ResizeMode.Stretch
+        )
+        self.table.verticalHeader().setVisible(False)
+        self.table.setAlternatingRowColors(True)
+        self.table.setSelectionBehavior(
+            QAbstractItemView.SelectionBehavior.SelectRows
+        )
+        self.table.setSelectionMode(
+            QAbstractItemView.SelectionMode.SingleSelection
+        )
+        self.table.setMinimumHeight(220)
+        self.table.setEditTriggers(
+            QAbstractItemView.EditTrigger.NoEditTriggers
+        )
+
+        self.table.itemSelectionChanged.connect(
+            self.update_stats
+        )
+        self.table.cellClicked.connect(
+            self.handle_row_click
+        )
+
+        main.addWidget(self.table, 1)
+
+        self.setStyleSheet(DARK_QSS)
+
+        self.refresh()
+
+    def enter_dashboard(self):
+        hospital_name = self.hospital_input.text().strip()
+
+        if not hospital_name:
+            self.welcome_error.setText(
+                "Please enter the hospital name first."
+            )
+            return
+
+        self.hospital_name = hospital_name
+        self.title_label.setText(
+            f"Welcome, {hospital_name}"
+        )
+        self.stack.setCurrentIndex(1)
+
+    def refresh(self):
+        self.all_records = load_facilities()[:1]
+        self.apply_filters()
+
+    def apply_filters(self):
+        query = self.search_input.text().strip().lower()
+        selected_location = self.location_filter.currentText()
+
+        filtered_records = []
+
+        for record in self.all_records:
+            name_matches = (
+                query == ""
+                or query in record["name"].lower()
+                or query in record["location"].lower()
+            )
+
+            location_matches = (
+                selected_location == "All Locations"
+                or record["location"] == selected_location
+            )
+
+            if name_matches and location_matches:
+                filtered_records.append(record)
+
+        self.populate_table(filtered_records)
+        self.update_stats()
+
+    def populate_table(self, records):
+        self.table.setRowCount(0)
+
+        for record in records:
+            row = self.table.rowCount()
+            self.table.insertRow(row)
+
+            available_beds = max(
+                record["total_beds"] - record["patients"],
+                0,
+            )
+
+            if record["total_beds"] > 0:
+                availability_percentage = int(
+                    available_beds
+                    / record["total_beds"]
+                    * 100
+                )
+            else:
+                availability_percentage = 0
+
+            availability_text = (
+                f"{available_beds}/{record['total_beds']} "
+                f"({availability_percentage}%)"
+            )
+
+            values = [
+                str(record["id"]),
+                record["name"],
+                record["location"],
+                record["contact"],
+                str(record["patients"]),
+                str(record["total_beds"]),
+                availability_text,
+                record["last_updated"],
+            ]
+
+            for column, value in enumerate(values):
+                item = QTableWidgetItem(value)
+                item.setTextAlignment(
+                    Qt.AlignmentFlag.AlignCenter
+                )
+
+                if column == 6 and record["total_beds"] > 0:
+                    if availability_percentage < 25:
+                        item.setForeground(
+                            QColor("#FCA5A5")
+                        )
+                    elif availability_percentage < 60:
+                        item.setForeground(
+                            QColor("#FCD34D")
+                        )
+                    else:
+                        item.setForeground(
+                            QColor("#2DD4BF")
+                        )
+
+                self.table.setItem(
+                    row,
+                    column,
+                    item,
+                )
+
+    def handle_row_click(self, row, column):
+        self.table.selectRow(row)
+        self.update_stats(row)
+
+    def update_stats(self, selected_row=None):
+        if selected_row is None:
+            selected_row = self.table.currentRow()
+
+        records = self.all_records
+
+        if selected_row >= 0:
+            id_item = self.table.item(
+                selected_row,
+                0,
+            )
+
+            if id_item is not None:
+                selected_id = int(id_item.text())
+
+                selected_record = next(
+                    (
+                        record
+                        for record in self.all_records
+                        if record["id"] == selected_id
+                    ),
+                    None,
+                )
+
+                if selected_record is not None:
+                    records = [selected_record]
+
+        record_count = len(records)
+
+        total_patients = sum(
+            record["patients"]
+            for record in records
+        )
+
+        total_beds = sum(
+            record["total_beds"]
+            for record in records
+        )
+
+        occupied_beds = sum(
+            min(
+                record["patients"],
+                record["total_beds"],
+            )
+            for record in records
+        )
+
+        available_beds = max(
+            total_beds - occupied_beds,
+            0,
+        )
+
+        total_icu_beds = sum(
+            record["icu_beds"]
+            for record in records
+        )
+
+        available_icu_beds = total_icu_beds
+        occupied_icu_beds = max(
+            total_icu_beds - available_icu_beds,
+            0,
+        )
+
+        self.patient_card.value.setText(
+            str(total_patients)
+        )
+
+        self.total_card.value.setText(
+            str(total_beds)
+        )
+
+        self.available_card.value.setText(
+            str(available_beds)
+        )
+
+        self.icu_card.value.setText(
+            str(available_icu_beds)
+        )
+
+        self.donut.set_data(
+            available_beds,
+            total_beds,
+            occupied_beds,
+        )
+
+        self.occupied_label.setText(
+            f"Occupied beds: {occupied_beds}"
+        )
+
+        self.icu_donut.set_data(
+            available_icu_beds,
+            total_icu_beds,
+            occupied_icu_beds,
+        )
+
+        self.icu_occupied_label.setText(
+            f"Occupied ICU beds: {occupied_icu_beds}"
+        )
+
+        general_total = sum(
+            record["general_beds"]
+            for record in records
+        )
+
+        general_available = max(
+            general_total - occupied_beds,
+            0,
+        )
+
+        self.general_bar.set_data(
+            general_available,
+            general_total,
+        )
+
+        self.icu_bar.set_data(
+            available_icu_beds,
+            total_icu_beds,
+        )
+
+        if record_count == 0:
+            self.warning_label.setText(
+                "Capacity status will appear when data is available."
+            )
+            self.warning_label.setStyleSheet(
+                "color:#8191A5;font-size:9pt;padding:6px;"
+            )
+        elif total_beds > 0 and available_beds == 0:
+            self.warning_label.setText(
+                "ALERT: All hospital beds are currently full."
+            )
+            self.warning_label.setStyleSheet(
+                "color:#FCA5A5;font-size:10pt;"
+                "font-weight:700;padding:6px;"
+            )
+        elif total_icu_beds > 0 and available_icu_beds == 0:
+            self.warning_label.setText(
+                "ALERT: All ICU beds are currently full."
+            )
+            self.warning_label.setStyleSheet(
+                "color:#FCA5A5;font-size:10pt;"
+                "font-weight:700;padding:6px;"
+            )
+        else:
+            self.warning_label.setText(
+                f"{occupied_beds} occupied beds — "
+                f"{available_beds} beds currently available."
+            )
+            self.warning_label.setStyleSheet(
+                "color:#2DD4BF;font-size:9pt;padding:6px;"
+            )
+
+    def edit_facility(self):
+        row = self.table.currentRow()
+
+        if row < 0:
+            QMessageBox.information(
+                self,
+                "Edit Record",
+                "Select a record to edit first.",
+            )
+            return
+
+        record_id = int(
+            self.table.item(row, 0).text()
+        )
+
+        record = next(
+            (
+                item
+                for item in self.all_records
+                if item["id"] == record_id
+            ),
+            None,
+        )
+
+        if record is None:
+            return
+
+        dialog = FacilityDialog(
+            self,
+            record=record,
+        )
+
+        if dialog.exec() == QDialog.DialogCode.Accepted:
+            data = dialog.get_data()
+
+            if not data["name"]:
+                QMessageBox.warning(
+                    self,
+                    "Validation",
+                    "Hospital name is required.",
+                )
+                return
+
+            save_facility(
+                data,
+                record_id=record_id,
+            )
+
+            self.refresh()
+
+    def delete_facility(self):
+        row = self.table.currentRow()
+
+        if row < 0:
+            QMessageBox.information(
+                self,
+                "Delete Record",
+                "Select a record to delete first.",
+            )
+            return
+
+        record_id = int(
+            self.table.item(row, 0).text()
+        )
+
+        hospital_name = self.table.item(row, 1).text()
+
+        reply = QMessageBox.question(
+            self,
+            "Delete Record",
+            f"Delete '{hospital_name}'? This cannot be undone.",
+            QMessageBox.StandardButton.Yes
+            | QMessageBox.StandardButton.No,
+        )
+
+        if reply == QMessageBox.StandardButton.Yes:
+            delete_facility(record_id)
+            self.refresh()
+
+    def keyPressEvent(self, event):
+        if event.key() == Qt.Key.Key_Escape:
+            self.close()
+        else:
+            super().keyPressEvent(event)
+
+if __name__ == "__main__":
+    init_db()
+
+    app = QApplication(sys.argv)
+
+    window = LeptoTrack()
+    window.show()
+
+    sys.exit(app.exec())
